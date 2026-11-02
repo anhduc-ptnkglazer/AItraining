@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NEON APOCALYPSE</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#070b16;color:white;font-family:Arial;overflow:hidden}
+canvas{display:block;width:100vw;height:100vh;background:#0b1020}
+#hud{position:fixed;top:12px;left:12px;z-index:2;pointer-events:none}
+.panel{background:#111a2bdd;border:1px solid #34415f;padding:10px 14px;border-radius:10px;margin-bottom:7px;min-width:180px}
+.bar{height:10px;background:#333;border-radius:10px;overflow:hidden;margin-top:5px}
+.fill{height:100%;transition:width .15s}
+#hp{background:#ff426e}#xp{background:#39d9ff}
+#controls{position:fixed;bottom:18px;left:18px;right:18px;display:flex;justify-content:space-between;align-items:end;pointer-events:none}
+.pad{display:grid;grid-template-columns:48px 48px 48px;grid-template-rows:48px 48px 48px;gap:4px;pointer-events:auto}
+.ctrl{background:#263653bb;border:1px solid #7183a9;color:white;border-radius:12px;font-size:20px;touch-action:none}
+#fire{width:85px;height:85px;border-radius:50%;background:#e83369bb;font-size:16px;pointer-events:auto;touch-action:none}
+#overlay{position:fixed;inset:0;background:#050916ed;display:flex;align-items:center;justify-content:center;z-index:5;text-align:center;padding:20px}
+.card{max-width:500px;width:100%;padding:30px;background:#111b30;border:1px solid #46577c;border-radius:18px}
+h1{color:#55e8ff;font-size:clamp(30px,7vw,48px);margin:0 0 10px}
+button{padding:13px 22px;background:#12b9d9;color:#07111e;border:0;border-radius:9px;font-weight:bold;cursor:pointer;margin:6px}
+#map{position:fixed;right:12px;top:12px;width:125px;height:125px;border:1px solid #607293;border-radius:8px;opacity:.8}
+#help{position:fixed;bottom:12px;left:50%;transform:translateX(-50%);color:#aabbd4;font-size:12px;white-space:nowrap}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="hud">
+ <div class="panel">
+  <b>⚡ NEON APOCALYPSE</b>
+  <div id="level">LEVEL 1</div>
+  <div>❤️ <span id="health">100</span>/100</div>
+  <div class="bar"><div id="hp" class="fill" style="width:100%"></div></div>
+  <div>XP <span id="xptext">0 / 100</span></div>
+  <div class="bar"><div id="xp" class="fill" style="width:0%"></div></div>
+ </div>
+ <div class="panel">
+  ☠ Kills: <span id="kills">0</span><br>
+  💰 Coins: <span id="coins">0</span><br>
+  🔫 Weapon: <span id="weapon">Pistol</span><br>
+  🌊 Wave: <span id="wave">1</span>
+ </div>
+</div>
+<canvas id="map"></canvas>
+<div id="controls">
+ <div class="pad">
+  <div></div><button class="ctrl" data-key="w">▲</button><div></div>
+  <button class="ctrl" data-key="a">◀</button><button class="ctrl" data-key="s">▼</button><button class="ctrl" data-key="d">▶</button>
+ </div>
+ <button id="fire">FIRE</button>
+</div>
+<div id="help">WASD / ARROW KEYS: MOVE · MOUSE: AIM · CLICK: SHOOT · SPACE: SHOOT</div>
+<div id="overlay">
+ <div class="card">
+  <h1>NEON<br>APOCALYPSE</h1>
+  <p>Survive the infected city. Defeat enemies, collect coins, upgrade your weapons and fight the boss.</p>
+  <p>WASD to move · Mouse to aim · Click to shoot</p>
+  <button id="start">START GAME</button>
+  <p style="color:#9eb1d1;font-size:12px">Explore. Fight. Survive.</p>
+ </div>
+</div>
+<script>
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+const map=document.getElementById("map");
+const mctx=map.getContext("2d");
+const W=2400,H=2400;
+let cw,ch,camX=0,camY=0;
+function resize(){cw=canvas.width=innerWidth;ch=canvas.height=innerHeight}
+addEventListener("resize",resize);resize();
+
+const keys={};
+let mouse={x:innerWidth/2,y:innerHeight/2,down:false};
+let player,enemies=[],bullets=[],particles=[],loot=[],obstacles=[];
+let running=false,gameover=false;
+let kills=0,coins=0,wave=1,spawnTimer=0,fireTimer=0;
+let last=0,elapsed=0;
+let upgrades=0;
+
+const rand=(a,b)=>Math.random()*(b-a)+a;
+const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+
+function reset(){
+ player={x:W/2,y:H/2,r:15,hp:100,maxHp:100,speed:230,
+  xp:0,level:1,damage:25,rate:.23,range:650,weapon:"Pistol",
+  angle:0};
+ enemies=[];bullets=[];particles=[];loot=[];
+ kills=0;coins=0;wave=1;spawnTimer=0;fireTimer=0;
+ elapsed=0;upgrades=0;gameover=false;
+ for(let i=0;i<70;i++){
+  let x=rand(80,W-80),y=rand(80,H-80);
+  if(Math.hypot(x-W/2,y-H/2)>180)
+   obstacles.push({x,y,r:rand(20,43),type:Math.random()<.5?"rock":"tree"});
+ }
+ obstacles=obstacles.slice(-70);
+}
+
+function spawnEnemy(){
+ let a=rand(0,Math.PI*2);
+ let x=clamp(player.x+Math.cos(a)*rand(500,800),30,W-30);
+ let y=clamp(player.y+Math.sin(a)*rand(500,800),30,H-30);
+ let boss=wave%5===0&&enemies.filter(e=>e.boss).length===0&&Math.random()<.14;
+ let type= boss?"boss":Math.random()<.25?"fast":"normal";
+ let scale=1+wave*.12;
+ enemies.push({
+  x,y,r:boss?36:type==="fast"?11:17,
+  hp:(boss?350:type==="fast"?38:75)*scale,
+  maxHp:(boss?350:type==="fast"?38:75)*scale,
+  speed:(boss?55:type==="fast"?150:75)*Math.sqrt(scale),
+  damage:boss?25:12,
+  boss,type,attack:0
+ });
+}
+
+function shoot(){
+ let a=player.angle;
+ let spread=player.weapon==="Shotgun"?.25:0;
+ let count=player.weapon==="Shotgun"?5:1;
+ for(let i=0;i<count;i++){
+  let ang=a+rand(-spread,spread);
+  bullets.push({
+   x:player.x+Math.cos(ang)*20,y:player.y+Math.sin(ang)*20,
+   vx:Math.cos(ang)*650,vy:Math.sin(ang)*650,
+   damage:player.damage,count:0
+  });
+ }
+}
+
+function burst(x,y,color,n=8){
+ for(let i=0;i<n;i++){
+  let a=rand(0,Math.PI*2),s=rand(40,190);
+  particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,
+   life:rand(.2,.6),color});
+ }
+}
+
+function levelUp(){
+ player.level++;
+ player.xp=0;
+ player.maxHp+=12;
+ player.hp=Math.min(player.maxHp,player.hp+35);
+ player.damage+=5;
+ player.rate=Math.max(.09,player.rate*.94);
+ upgrades++;
+ if(upgrades%2===0)player.weapon="Shotgun";
+}
+
+function update(dt){
+ if(!running||gameover)return;
+ elapsed+=dt;
+ let dx=(keys.d||keys.arrowright?1:0)-(keys.a||keys.arrowleft?1:0);
+ let dy=(keys.s||keys.arrowdown?1:0)-(keys.w||keys.arrowup?1:0);
+ let len=Math.hypot(dx,dy)||1;
+ player.x=clamp(player.x+dx/len*player.speed*dt,20,W-20);
+ player.y=clamp(player.y+dy/len*player.speed*dt,20,H-20);
+ camX=clamp(player.x-cw/2,0,W-cw);
+ camY=clamp(player.y-ch/2,0,H-ch);
+ player.angle=Math.atan2(mouse.y-(player.y-camY),mouse.x-(player.x-camX));
+
+ fireTimer-=dt;
+ if((mouse.down||keys.space||keys.fire)&&fireTimer<=0){
+  shoot();fireTimer=player.rate;
+ }
+
+ spawnTimer-=dt;
+ let interval=Math.max(.22,1.35-wave*.07);
+ if(spawnTimer<=0){
+  spawnEnemy();spawnTimer=interval;
+ }
+ if(elapsed>35*wave){wave++;elapsed=0}
+
+ for(let e of enemies){
+  let a=Math.atan2(player.y-e.y,player.x-e.x);
+  let d=dist(e,player);
+  if(d>e.r+player.r+4){
+   e.x+=Math.cos(a)*e.speed*dt;
+   e.y+=Math.sin(a)*e.speed*dt;
+  }else{
+   e.attack-=dt;
+   if(e.attack<=0){
+    player.hp-=e.damage;
+    e.attack=.8;
+    burst(player.x,player.y,"#ff426e",3);
+   }
+  }
+  if(e.boss&&d<500&&Math.random()<dt*.15){
+   for(let j=-1;j<=1;j++){
+    let aa=a+j*.3;
+    bullets.push({x:e.x,y:e.y,vx:Math.cos(aa)*260,
+     vy:Math.sin(aa)*260,damage:-18,enemy:true});
+   }
+  }
+ }
+
+ for(let b of bullets){
+  b.x+=b.vx*dt;b.y+=b.vy*dt;b.count+=dt;
+  if(b.enemy){
+   if(Math.hypot(b.x-player.x,b.y-player.y)<player.r+6){
+    player.hp-=Math.abs(b.damage);b.count=99;
+    burst(b.x,b.y,"#ff426e",4);
+   }
+  }else{
+   for(let e of enemies){
+    if(e.hp>0&&Math.hypot(b.x-e.x,b.y-e.y)<e.r+5){
+     e.hp-=b.damage;b.count=99;
+     burst(b.x,b.y,"#4defff",3);
+     if(e.hp<=0){
+      kills++;
+      coins+=e.boss?50:Math.floor(rand(2,9));
+      player.xp+=e.boss?100:20;
+      loot.push({x:e.x,y:e.y,type:"coin"});
+      burst(e.x,e.y,e.boss?"#ffcf50":"#ff426e",15);
+      if(player.xp>=player.level*100)levelUp();
+     }
+     break;
+    }
+   }
+  }
+ }
+ bullets=bullets.filter(b=>b.count<2&&b.x>0&&b.y>0&&b.x<W&&b.y<H);
+ enemies=enemies.filter(e=>e.hp>0);
+ particles.forEach(p=>{
+  p.x+=p.vx*dt;p.y+=p.vy*dt;
+  p.life-=dt;p.vx*=.95;p.vy*=.95;
+ });
+ particles=particles.filter(p=>p.life>0);
+ loot=loot.filter(l=>{
+  if(Math.hypot(l.x-player.x,l.y-player.y)<35){
+   coins+=5;return false;
+  }
+  return true;
+ });
+ player.hp=clamp(player.hp,0,player.maxHp);
+ if(player.hp<=0)endGame();
+ updateHUD();
+}
+
+function draw(){
+ ctx.clearRect(0,0,cw,ch);
+ ctx.fillStyle="#0b1220";ctx.fillRect(0,0,cw,ch);
+ ctx.save();ctx.translate(-camX,-camY);
+ // grid
+ ctx.strokeStyle="#17243a";ctx.lineWidth=1;
+ for(let x=0;x<W;x+=80){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke()}
+ for(let y=0;y<H;y+=80){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke()}
+ // obstacles
+ for(let o of obstacles){
+  ctx.fillStyle=o.type==="tree"?"#174d40":"#344258";
+  ctx.beginPath();ctx.arc(o.x,o.y,o.r,0,Math.PI*2);ctx.fill();
+  ctx.strokeStyle="#6585a3";ctx.stroke();
+ }
+ // loot
+ for(let l of loot){
+  ctx.fillStyle="#ffcf50";ctx.beginPath();ctx.arc(l.x,l.y,7,0,7);ctx.fill();
+ }
+ // bullets
+ for(let b of bullets){
+  ctx.fillStyle=b.enemy?"#ff426e":"#59f3ff";
+  ctx.beginPath();ctx.arc(b.x,b.y,5,0,7);ctx.fill();
+ }
+ // enemies
+ for(let e of enemies){
+  ctx.fillStyle=e.boss?"#a855f7":e.type==="fast"?"#ffab42":"#f04468";
+  ctx.beginPath();ctx.arc(e.x,e.y,e.r,0,7);ctx.fill();
+  ctx.fillStyle="#111";ctx.fillRect(e.x-e.r,e.y-e.r-10,e.r*2,4);
+  ctx.fillStyle="#60ff9d";ctx.fillRect(e.x-e.r,e.y-e.r-10,e.r*2*e.hp/e.maxHp,4);
+  if(e.boss){ctx.fillStyle="white";ctx.font="12px Arial";ctx.fillText("BOSS",e.x-16,e.y-e.r-17)}
+ }
+ // particles
+ for(let p of particles){
+  ctx.globalAlpha=Math.max(0,p.life*2);
+  ctx.fillStyle=p.color;ctx.fillRect(p.x,p.y,4,4);
+ }
+ ctx.globalAlpha=1;
+ // player
+ ctx.save();ctx.translate(player.x,player.y);ctx.rotate(player.angle);
+ ctx.shadowBlur=18;ctx.shadowColor="#37eaff";
+ ctx.fillStyle="#40dfff";
+ ctx.fillRect(-11,-12,25,24);
+ ctx.fillStyle="#fff";ctx.fillRect(4,-5,23,10);
+ ctx.shadowBlur=0;ctx.restore();
+ ctx.restore();
+ drawMap();
+}
+
+function drawMap(){
+ mctx.clearRect(0,0,125,125);
+ mctx.fillStyle="#101a2a";mctx.fillRect(0,0,125,125);
+ mctx.fillStyle="#ff426e";
+ for(let e of enemies){
+  mctx.fillRect(e.x/W*125-1,e.y/H*125-1,3,3);
+ }
+ mctx.fillStyle="#55edff";
+ mctx.beginPath();mctx.arc(player.x/W*125,player.y/H*125,3,0,7);mctx.fill();
+}
+
+function updateHUD(){
+ document.getElementById("health").textContent=Math.ceil(player.hp);
+ document.getElementById("hp").style.width=player.hp/player.maxHp*100+"%";
+ document.getElementById("xptext").textContent=player.xp+" / "+player.level*100;
+ document.getElementById("xp").style.width=player.xp/(player.level*100)*100+"%";
+ document.getElementById("level").textContent="LEVEL "+player.level;
+ document.getElementById("kills").textContent=kills;
+ document.getElementById("coins").textContent=coins;
+ document.getElementById("wave").textContent=wave;
+ document.getElementById("weapon").textContent=player.weapon;
+}
+
+function endGame(){
+ gameover=true;running=false;
+ document.getElementById("overlay").style.display="flex";
+ document.querySelector("#overlay .card").innerHTML=
+ `<h1>GAME OVER</h1><h2>Score: ${kills*100+coins*10}</h2>
+ <p>Enemies defeated: ${kills}</p><p>Reached wave: ${wave}</p>
+ <button onclick="startGame()">PLAY AGAIN</button>`;
+}
+
+function startGame(){
+ obstacles=[];reset();running=true;
+ document.getElementById("overlay").style.display="none";
+}
+
+document.getElementById("start").onclick=startGame;
+addEventListener("keydown",e=>{
+ keys[e.key.toLowerCase()]=true;
+ if([" ","arrowup","arrowdown","arrowleft","arrowright"].includes(e.key.toLowerCase()))e.preventDefault();
+});
+addEventListener("keyup",e=>keys[e.key.toLowerCase()]=false);
+canvas.addEventListener("mousemove",e=>{mouse.x=e.clientX;mouse.y=e.clientY});
+canvas.addEventListener("mousedown",()=>mouse.down=true);
+addEventListener("mouseup",()=>mouse.down=false);
+canvas.addEventListener("touchmove",e=>{
+ const t=e.touches[0];mouse.x=t.clientX;mouse.y=t.clientY;
+},{passive:true});
+document.querySelectorAll("[data-key]").forEach(b=>{
+ const k=b.dataset.key;
+ b.addEventListener("pointerdown",e=>{e.preventDefault();keys[k]=true});
+ ["pointerup","pointerleave","pointercancel"].forEach(ev=>b.addEventListener(ev,()=>keys[k]=false));
+});
+document.getElementById("fire").addEventListener("pointerdown",e=>{e.preventDefault();keys.fire=true});
+["pointerup","pointerleave","pointercancel"].forEach(ev=>document.getElementById("fire").addEventListener(ev,()=>keys.fire=false));
+
+function loop(t){
+ let dt=Math.min((t-last)/1000,.04)||0;last=t;
+ update(dt);draw();requestAnimationFrame(loop);
+}
+reset();requestAnimationFrame(loop);
+</script>
+</body>
+</html>
